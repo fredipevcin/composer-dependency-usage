@@ -1,0 +1,320 @@
+#!/usr/bin/env php
+<?php
+// check options and arguments
+$arguments = ['token' => 1, 'organization' => 2];
+foreach ($arguments as $argName => $argPos) {
+    $options[$argName] = isset($_SERVER['argv'][$argPos]) ? $_SERVER['argv'][$argPos] : null;
+}
+
+foreach ($options as $opt) {
+    if (!is_string($opt)) {
+        usage();
+    }
+}
+
+$options['dest'] = isset($_SERVER['argv'][3]) ? $_SERVER['argv'][3] : null;
+
+// Code
+function usage()
+{
+    echo <<<EOT
+Usage:
+  generate token organization [path]
+
+Options:
+  path    Path where to output projects.json file
+
+Outputs content to standard output or to file if path option is set
+
+EOT;
+    exit(1);
+}
+
+interface ApiRequest
+{
+    /**
+     * @param string $url
+     *
+     * @return ApiResponse
+     */
+    public function fetch($url);
+}
+
+class ApiResponse
+{
+    private $rawResponse;
+    private $headers;
+    private $content;
+
+    public function __construct($rawResponse)
+    {
+        $this->rawResponse = $rawResponse;
+
+        $this->parse($rawResponse);
+    }
+
+    public function getRaw()
+    {
+        return $this->rawResponse;
+    }
+
+    public function getContent()
+    {
+        return $this->content;
+    }
+
+    public function getHeaders()
+    {
+        return $this->headers;
+    }
+
+    protected function parse($rawResponse)
+    {
+        list($headers, $content) = explode("\r\n\r\n", $rawResponse, 2);
+
+        $this->headers = $this->parseHeaders($headers);
+        $this->content = json_decode($content, true);
+    }
+
+    protected function parseHeaders($rawHeaders)
+    {
+        $headers = [];
+        $headerItems = explode("\n", $rawHeaders);
+        foreach ($headerItems as $header)
+        {
+            if (strpos($header, ':') === false) {
+                continue;
+            }
+
+            list($name, $value) = explode(':', trim($header), 2);
+            $headers[trim($name)] = trim($value);
+        }
+
+        if (isset($headers['Link'])) {
+            $links = [];
+            foreach (explode(',', $headers['Link']) as $link) {
+
+                $matches = [];
+                preg_match('~\<(?<url>.+?)\>.+?rel="(?<rel>.+?)"~', $link, $matches);
+                $links[$matches['rel']] = $matches['url'];
+            }
+
+            if (!empty($links)) {
+                $headers['Link'] = $links;
+            }
+        }
+
+        return $headers;
+    }
+}
+
+class CacheApiRequest implements ApiRequest
+{
+    /**
+     * @var ApiRequest
+     */
+    private $request;
+
+    /**
+     * @var string
+     */
+    private $cacheDir;
+
+    public function __construct(ApiRequest $request, $cacheDir)
+    {
+        $this->request = $request;
+        $this->cacheDir = $cacheDir;
+    }
+
+    public function fetch($url)
+    {
+        $cachedFile = $this->getCachedFile($url);
+
+        if (is_readable($cachedFile)) {
+            $response = new ApiResponse(file_get_contents($cachedFile));
+        } else {
+            $response = $this->request->fetch($url);
+            file_put_contents($cachedFile, $response->getRaw());
+        }
+
+        return $response;
+    }
+
+    protected function getCachedFile($url)
+    {
+        if (!is_dir($this->cacheDir)) {
+            mkdir($this->cacheDir, 0777, true);
+        }
+        return $this->cacheDir . '/' . md5($url);
+    }
+}
+
+class GitHubApiRequest implements ApiRequest
+{
+    protected $token;
+
+    public function __construct($token)
+    {
+        $this->token = $token;
+    }
+
+    public function fetch($url)
+    {
+        $ch = curl_init();
+
+        // set URL and other appropriate options
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_HEADER, 1);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Authorization: token ' . $this->token,
+            'User-Agent: astinabot-0.1',
+            'Accept: */*'
+        ]);
+
+        // grab URL and pass it to the browser
+        $response = curl_exec($ch);
+
+        $errorno = curl_errno($ch);
+        $error = curl_error($ch);
+
+        if ($errorno !== 0) {
+            throw new \Exception($error, $errorno);
+        }
+
+        // close cURL resource, and free up system resources
+        curl_close($ch);
+
+        return new ApiResponse($response);
+    }
+}
+
+
+class ProjectList
+{
+    /**
+     * @var ApiRequest
+     */
+    private $request;
+
+    /**
+     * @var string
+     */
+    private $organization;
+
+    public function __construct(ApiRequest $request, $organization)
+    {
+        $this->request      = $request;
+        $this->organization = $organization;
+    }
+
+    public function get()
+    {
+        $projects = [];
+        $url = sprintf('https://api.github.com/orgs/%s/repos', $this->organization);
+        do {
+            $response = $this->request->fetch($url);
+            $projects = array_merge($response->getContent(), $projects);
+
+            $headers = $response->getHeaders();
+            $url = isset($headers['Link']['next']) ? $headers['Link']['next'] : null;
+        } while ($url);
+
+        return $projects;
+    }
+}
+
+class ProjectBundleInfo
+{
+    /**
+     * @var ApiRequest
+     */
+    private $request;
+
+    public function __construct(ApiRequest $request)
+    {
+        $this->request = $request;
+    }
+
+    public function get($repo)
+    {
+        $contentComposerJson = $this->request->fetch(sprintf('https://api.github.com/repos/%s/contents/composer.json', $repo))->getContent();
+        $contentComposerLock = $this->request->fetch(sprintf('https://api.github.com/repos/%s/contents/composer.lock', $repo))->getContent();
+
+        if (!isset($contentComposerLock['content'])) {
+            return false;
+        }
+
+        $composerJson = json_decode(base64_decode($contentComposerJson['content']), true);
+        if (!isset($composerJson['name'])) {
+            return false;
+        }
+
+        $composerLock = json_decode(base64_decode($contentComposerLock['content']), true);
+
+        return $this->generateInfo($composerJson, $composerLock);
+    }
+
+    protected function generateInfo($composerJson, $composerLock)
+    {
+        $project = [
+            'name'         => preg_replace('~^[^/]+/~', '', $composerJson['name']),
+            'description'  => isset($composerJson['description']) ? $composerJson['description'] : '',
+            'dependencies' => [],
+        ];
+
+        foreach ($composerLock['packages'] as $package) {
+            $packageName = $package['name'];
+
+            $project['dependencies'][$packageName] = $package['version'];
+        }
+
+        return $project;
+    }
+}
+
+// Prepare
+$request = new GitHubApiRequest($options['token']);
+if (getenv('CDU_CACHE') === 'true') {
+    $request = new CacheApiRequest($request, __DIR__ . '/cache');
+}
+
+$projectList = new ProjectList($request, $options['organization']);
+$projectBundleInfo = new ProjectBundleInfo($request);
+
+$organizationProjects = $projectList->get();
+
+$projects = [];
+foreach ($organizationProjects as $project) {
+    $projectInfo = $projectBundleInfo->get($project['full_name']);
+
+    if ($projectInfo === false) {
+        continue;
+    }
+
+    // filter dependencies
+    $deps = [];
+    foreach ($projectInfo['dependencies'] as $depName => $depVersion) {
+        if (strpos($depName, $options['organization'] . '/') !== 0) {
+            continue;
+        }
+
+        $depName = str_replace($options['organization'] . '/', '', $depName);
+        $deps[$depName] = $depVersion;
+    }
+
+    if (empty($deps)) {
+        continue;
+    }
+
+    $projectInfo['dependencies'] = $deps;
+
+    $projects[] = $projectInfo;
+}
+
+if ($options['dest'] !== null) {
+    file_put_contents($options['dest'], json_encode($projects));
+} else {
+    echo json_encode($projects);
+}

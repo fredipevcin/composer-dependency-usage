@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html ng-app="projects">
+
+    <head>
+        <meta charset="utf-8" />
+        <title>Projects and bundles</title>
+        <link rel="stylesheet" href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap.min.css">
+        <script src="//code.jquery.com/jquery-2.1.0.min.js"></script>
+        <script src="//netdna.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js"></script>
+        <script src="//ajax.googleapis.com/ajax/libs/angularjs/1.3.0-beta.5/angular.min.js"></script>
+        <script src="//ajax.googleapis.com/ajax/libs/angularjs/1.3.0-beta.5/angular-resource.min.js"></script>
+        <script src="app.js"></script>
+        <style>
+            .panel ul {
+                margin-bottom: 0;
+            }
+            .btn:active, .btn:focus, .btn:active:focus {
+                outline: none;
+            }
+            .bundle-filters .btn {
+                margin: 0 5px 5px 0;
+            }
+            .bundle-filters .panel-heading .btn {
+                margin: -2px 0 0 0;
+            }
+            .sidebar-navigation {
+                list-style: none;
+                padding-left: 0
+            }
+            .sidebar-navigation.affix {
+                top: 20px;
+            }
+            .nav>li>a {
+                color: #999;
+                padding: 0;
+            }
+            .nav>li.active>a {
+                color: #428bca;
+            }
+            @media (min-width: 768px) {
+                .sidebar-navigation {
+                    width: 213px;
+                }
+            }
+            @media (min-width: 1200px) {
+                .sidebar-navigation {
+                    width: 263px;
+                }
+            }
+        </style>
+    </head>
+
+    <body ng-controller="MainCtrl">
+        <div class="container">
+            <div class="page-header">
+                <h1>Projects and bundles</h1>
+            </div>
+            <div class="panel panel-primary bundle-filters">
+                <div class="panel-heading">
+                    <button type="button" class="btn btn-default pull-right btn-xs" ng-if="selectedDependencies.length > 0" ng-click="$parent.selectedDependencies = []"><span class="glyphicon glyphicon-remove"></span> Reset</button>
+                    <h3 class="panel-title">Filter by bundle</h3>
+                </div>
+                <div class="panel-body">
+                    <span ng-repeat="dependency in dependencies | orderBy:'toString()'" >
+                        <button type="button" ng-click="toggleDependency(dependency)" class="btn ng-class: $parent.getClass('btn', dependency);">{{ dependency }}</button>
+                    </span>
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-sm-3 nav-parent">
+                    <ul class="sidebar-navigation nav" data-spy="affix" data-offset-top="340">
+                        <li ng-repeat="project in projects | orderBy:'name' | filter:filterDependency"><a href="#project-{{ $index }}">{{ project.name }}</a></li>
+                    </ul>
+                </div>
+                <div class="col-sm-9">
+                    <div ng-repeat="project in projects | orderBy:'name' | filter:filterDependency" id="project-{{ $index }}">
+                        <div class="panel panel-default">
+                            <div class="panel-heading">
+                                <h3 class="panel-title">{{ project.name }}</h3>
+                            </div>
+                            <div class="panel-body">
+                                {{ project.description }}
+                                <hr >
+                                <ul>
+                                    <li ng-repeat="(dependencyName, dependencyVersion) in project.dependencies">{{ dependencyName }} <span class="label ng-class: $parent.getClass('label', dependencyName);">{{ dependencyVersion }}</span></span>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>
