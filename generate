@@ -239,12 +239,13 @@ class ProjectBundleInfo
 
     public function get($repo)
     {
-        $contentComposerJson = $this->request->fetch(sprintf('https://api.github.com/repos/%s/contents/composer.json', $repo))->getContent();
         $contentComposerLock = $this->request->fetch(sprintf('https://api.github.com/repos/%s/contents/composer.lock', $repo))->getContent();
 
         if (!isset($contentComposerLock['content'])) {
             return false;
         }
+
+        $contentComposerJson = $this->request->fetch(sprintf('https://api.github.com/repos/%s/contents/composer.json', $repo))->getContent();
 
         $composerJson = json_decode(base64_decode($contentComposerJson['content']), true);
         if (!isset($composerJson['name'])) {
